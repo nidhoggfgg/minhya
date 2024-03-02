@@ -1,41 +1,65 @@
 from PIL import Image
 import numpy as np
-import bpy
-import bmesh
-from mathutils import Vector
 
 PIC_XZ = "" # put the 1st picture path here
 PIC_YZ = "" # put the 2nd picture path here
 THRESHOLD = 180 # set the threshold here, normally 180 is good
 CUT = True # cut the internal dots or not
+BLOCK = "minecraft:white_wool" # the block in minecraft
 
 
 def main():
-    img1 = pre_resize(PIC_XZ, THRESHOLD)
-    img2 = pre_resize(PIC_YZ, THRESHOLD)
-    img1, img2 = auto_resize(img1, img2)
-    obj = build_unchecked(img1, img2)
-    if CUT:
-        obj = cut(obj)
-    create_dots(obj)
+    pass
 
 
-def create_dots(cube):
-    mesh = bpy.data.meshes.new(name="PointMesh")
-    obj = bpy.data.objects.new("PointObject", mesh)
-    bpy.context.collection.objects.link(obj)
-    bpy.context.view_layer.objects.active = obj
-    obj.select_set(True)
-    bpy.ops.object.mode_set(mode="EDIT")
-    bpy.ops.mesh.primitive_cube_add(size=0.02, location=(0, 0, 0))
-    bpy.ops.object.mode_set(mode="OBJECT")
-    bm = bmesh.new()
-    for xyz in cube:
-        bm.verts.new(Vector(xyz))
+def make_datapack(obj, path, namespace, name, undo):
+    obj = np.array(obj)
+    obj[:, [1, 2]] = obj[:, [2, 1]] # y->z, z->y
 
-    bm.to_mesh(mesh)
-    bm.free()
-    mesh.update()
+    # batches, because there is a limit of commands per function
+    batch_size = 10000
+    batch_num = 1 + (len(obj) - 1) // batch_size
+    batches = np.array_split(obj, batch_num)
+
+    # write both the draw and undo functions
+    for i, batch in enumerate(batches):
+        with open(f"{path}/{name}{i}.mcfunction", "w") as f1, open(
+            f"{path}/{undo}{i}.mcfunction", "w"
+        ) as f2:
+            for point in batch:
+                x, y, z = point[0], point[1], point[2]
+                block_command = f"setblock {x} {y} {z} {BLOCK}\n"
+                undo_command = f"setblock {x} {y} {z} minecraft:air\n"
+                f1.write(block_command)
+                f2.write(undo_command)
+    
+    # write the main function
+    with open(f"{path}/{name}.mcfunction", "w") as f1, open(
+        f"{path}/{undo}.mcfunction", "w"
+    ) as f2:
+        for i in range(len(batches)):
+            f1.write(f"function {namespace}:{name}{i}\n")
+            f2.write(f"function {namespace}:{undo}{i}\n")
+     
+
+# this function isn't used, we use obj[:, [1, 2]] = obj[:, [2, 1]] instead
+# but if you really want to rotate rather than change the axis, use this
+def rotate_90(point):
+    theta = np.pi / 2
+    rotation_matrix = np.array(
+        [
+            [1, 0, 0],
+            [0, np.cos(theta), -np.sin(theta)],
+            [0, np.sin(theta), np.cos(theta)],
+        ]
+    )
+
+    rotated_point = np.dot(rotation_matrix, point)
+    return rotated_point
+
+
+def scale(img, f):
+    return img.resize((int(img.width * f), int(img.height * f)))
 
 
 def pre_resize(pic, threshold):
@@ -135,3 +159,4 @@ def cut(obj):
 
 if __name__ == "__main__":
     main()
+
